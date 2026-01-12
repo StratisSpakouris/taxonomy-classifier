@@ -4,6 +4,7 @@ import os
 from datetime import datetime
 from main import ProcurementTaxonomyPipeline
 from hierarchical_classifier import HierachicalTaxonomyClassifier
+import gc
 import io
 
 # Page configuration
@@ -127,6 +128,8 @@ with tab1:
 
                 model_save_path = f"taxonomy_classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}.joblib"
                 pipeline.classifier.save(model_save_path)
+
+                gc.collect()
 
                 # Store in session state
                 st.session_state.trained_model = pipeline.classifier
@@ -431,3 +434,4 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("Built with Streamlit")
+
