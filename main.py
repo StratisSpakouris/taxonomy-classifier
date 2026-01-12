@@ -398,12 +398,9 @@ class ProcurementTaxonomyPipeline:
         if highlight_low_confidence:
             self._apply_highlighting(output_path, 'Predictions', self.confidence_threshold)
 
-        print(f"Results saved successfully!")
+        print(f"\nResults saved successfully!")
         print(f"    File: {output_path}")
         print(f"    Sheets: 'Predictions', 'Summary'")
-
-        if highlight_low_confidence:
-            print(f"    Low confidence rows (<{self.confidence_threshold:.2f}) highlighted in yellow")
 
     def _create_summary(self, df):
         """
@@ -411,46 +408,68 @@ class ProcurementTaxonomyPipeline:
         """
 
     def _apply_highlighting(self, excel_path, sheet_name, threshold):
-        """Apply highlighting to low confidence rows."""
+        """
+        Apply granular highlighting to prediction and confidence columns based on individual level confidence.
 
-        print(f"Applying highlighting...")
+        Highlights only the specific taxonomy level (L1/L2/L3) predictions and their confidence scores
+        that fall below the threshold, rather than highlighting entire rows.
+        """
+
+        print(f"Applying granular highlighting...")
 
         # Load workbook
         wb = load_workbook(excel_path)
         ws = wb[sheet_name]
 
-        # Find confidence column
-        confidence_col = None
+        # Find all relevant columns
+        column_map = {}
         for idx, cell in enumerate(ws[1], 1):
-            if cell.value == 'Combined_Confidence':
-                confidence_col = idx
-                break
+            col_name = cell.value
+            if col_name in ['L1_Prediction', 'L1_Confidence',
+                           'L2_Prediction', 'L2_Confidence',
+                           'L3_Prediction', 'L3_Confidence']:
+                column_map[col_name] = idx
 
-        if confidence_col is None:
-            print("Could not find 'Combined_Confidence' column for highlighting")
+        if len(column_map) == 0:
+            print("    Could not find prediction/confidence columns for highlighting")
             return
-        
+
         # Yellow fill for low confidence
         yellow_fill = PatternFill(start_color='FFFFFF00', end_color='FFFFFF00', fill_type='solid')
 
-        highlighted_count = 0
-        for row_idx in range(2, ws.max_row + 1): # Skip header
-            confidence_cell = ws.cell(row=row_idx, column=confidence_col)
+        highlighted_cells = 0
+        highlighted_rows = set()
 
-            if confidence_cell.value is not None:
-                try:
-                    confidence = float(confidence_cell.value)
-                    if confidence < threshold:
-                        # Highlight entire row
-                        for col_idx in range(1, ws.max_column + 1):
-                            ws.cell(row=row_idx, column=col_idx).fill = yellow_fill
-                        highlighted_count += 1
-                except (ValueError, TypeError):
-                    pass
+        for row_idx in range(2, ws.max_row + 1):  # Skip header
+            row_highlighted = False
 
-        # Save workook
+            # Check each level (L1, L2, L3)
+            for level in ['L1', 'L2', 'L3']:
+                conf_col = column_map.get(f'{level}_Confidence')
+                pred_col = column_map.get(f'{level}_Prediction')
+
+                if conf_col and pred_col:
+                    confidence_cell = ws.cell(row=row_idx, column=conf_col)
+
+                    if confidence_cell.value is not None:
+                        try:
+                            confidence = float(confidence_cell.value)
+                            if confidence < threshold:
+                                # Highlight both the prediction and confidence cells for this level
+                                ws.cell(row=row_idx, column=pred_col).fill = yellow_fill
+                                ws.cell(row=row_idx, column=conf_col).fill = yellow_fill
+                                highlighted_cells += 2
+                                row_highlighted = True
+                        except (ValueError, TypeError):
+                            pass
+
+            if row_highlighted:
+                highlighted_rows.add(row_idx)
+
+        # Save workbook
         wb.save(excel_path)
-        print(f"    Highlighted {highlighted_count} low confidence rows")
+        print(f"    Highlighted {highlighted_cells} cells across {len(highlighted_rows)} rows")
+        print(f"    (Only taxonomy levels with confidence < {threshold:.2f} are highlighted)")
 
     def run(self, input_path, output_path=None, mode='update', model_path=None):
         """

@@ -1,10 +1,57 @@
-import pandas as pd 
+import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from collections import defaultdict
 import re
 import warnings
 warnings.filterwarnings('ignore')
+
+def normalize_category_name(name):
+    """
+    Normalize category names to consistent format.
+
+    This ensures that category names from different sources (training data vs official taxonomy)
+    match correctly during hierarchy lookups.
+
+    Transformations:
+    - Strip whitespace
+    - Replace newlines with spaces
+    - Normalize multiple spaces to single space
+    - Replace special characters like / and , with spaces (to preserve word boundaries)
+    - Replace spaces with underscores
+
+    Parameters:
+    -----------
+    name : str or pd.NA
+        Category name to normalize
+
+    Returns:
+    --------
+    str or pd.NA : Normalized category name
+    """
+    if pd.isna(name):
+        return name
+
+    # Convert to string, strip whitespace
+    name = str(name).strip()
+
+    # Replace newlines and carriage returns with spaces
+    name = name.replace('\n', ' ').replace('\r', ' ')
+
+    # Replace special characters with spaces (to preserve word boundaries)
+    # This ensures "οικοδομικά/κατασκευαστικά" becomes "οικοδομικά_κατασκευαστικά"
+    name = name.replace('/', ' ').replace(',', ' ')
+
+    # Normalize multiple spaces to single space
+    name = re.sub(r'\s+', ' ', name)
+
+    # Replace spaces with underscores
+    name = name.replace(' ', '_')
+
+    # Final cleanup: strip any remaining whitespace
+    name = name.strip()
+
+    return name
 
 class TextPreprocessor:
 
@@ -80,20 +127,8 @@ class DataPreprocessor:
             # Track changes
             before = df_clean[col].copy()
 
-
-            df_clean[col] = df_clean[col].astype(str)
-
-            df_clean[col] = df_clean[col].replace('nan', pd.NA)
-
-            # Strip whitespace
-            df_clean[col] = df_clean[col].str.strip()
-
-            # Remove newlines
-            df_clean[col] = df_clean[col].replace('\n', ' ')
-            df_clean[col] = df_clean[col].replace('\r', ' ')
-
-            # Normalize multiple spaces
-            df_clean[col] = df_clean[col].str.replace(r'\s+', ' ', regex=True)
+            # Apply normalization function to ensure consistent formatting
+            df_clean[col] = df_clean[col].apply(normalize_category_name)
 
             # Replace empty strings with NaN
             df_clean[col] = df_clean[col].replace('', pd.NA)

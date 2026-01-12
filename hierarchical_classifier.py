@@ -4,7 +4,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB
 from sklearn.model_selection import train_test_split, StratifiedShuffleSplit
 from sklearn.metrics import classification_report, confusion_matrix, f1_score
-from preprocessing import TextPreprocessor, DataPreprocessor
+from preprocessing import TextPreprocessor, DataPreprocessor, normalize_category_name
 import joblib
 import json
 from collections import defaultdict
@@ -80,7 +80,7 @@ class HierachicalTaxonomyClassifier:
 
     def load_official_taxonomy(self, excel_path, sheet_name='L1-L2-L3'):
         """
-        Load official taxonomy from Excel file
+        Load official taxonomy from Excel file and normalize category names
         """
 
         print(f"\nLoading official taxonomy from '{sheet_name}' sheet...")
@@ -99,14 +99,19 @@ class HierachicalTaxonomyClassifier:
         # Clean the data
         df_tax = df_tax.dropna(subset=[l3_col])
 
+        # IMPORTANT: Normalize all category names to match training data format
+        df_tax[l1_col] = df_tax[l1_col].apply(normalize_category_name)
+        df_tax[l2_col] = df_tax[l2_col].apply(normalize_category_name)
+        df_tax[l3_col] = df_tax[l3_col].apply(normalize_category_name)
+
         # Build official hierarchy
         self.official_hierarchy_l1_to_l2 = {}
         self.official_hierarchy_l2_to_l3 = {}
 
         for _, row in df_tax.iterrows():
-            l1 = str(row[l1_col]).strip()
-            l2 = str(row[l2_col]).strip()
-            l3 = str(row[l3_col]).strip()
+            l1 = row[l1_col]
+            l2 = row[l2_col]
+            l3 = row[l3_col]
 
             # L1 -> L2 mapping
             if l1 not in self.official_hierarchy_l1_to_l2:
@@ -162,10 +167,10 @@ class HierachicalTaxonomyClassifier:
         # Extract prepared datasets
         train_l1 = result['train_l1']
         test_l1 = result['test_l1']
-        train_l2 = result['train_l1']
-        test_l2 = result['test_l1']
-        train_l3 = result['train_l1']
-        test_l3 = result['test_l1']
+        train_l2 = result['train_l2']  # FIX: Use correct L2 datasets
+        test_l2 = result['test_l2']     # FIX: Use correct L2 datasets
+        train_l3 = result['train_l3']  # FIX: Use correct L3 datasets
+        test_l3 = result['test_l3']     # FIX: Use correct L3 datasets
 
         # Store hierarhcy mapping
         for l1, l2_set, in result['hierarchy_l1_to_l2'].items():
@@ -195,7 +200,7 @@ class HierachicalTaxonomyClassifier:
         # Train L2 Model
         print("\n[2/3] Training L2 classifier...")
         X_train_l2 = self.vectorizer_l2.fit_transform(train_l2['description_clean'])
-        y_train_l2 = train_l2['Επίπεδο Κατηγοριοποίησης L.2'].notna()
+        y_train_l2 = train_l2['Επίπεδο Κατηγοριοποίησης L.2']  # FIX: Use actual L2 labels, not boolean
 
         # Validate: Check for NaN values before training
         nan_count_l2 = y_train_l2.isna().sum()
@@ -203,14 +208,14 @@ class HierachicalTaxonomyClassifier:
             raise ValueError(
                 f"L2 training data contains {nan_count_l2} NaN values!"
             )
-        
+
         self.model_l2 = MultinomialNB(alpha=self.alpha_l2)
         self.model_l2.fit(X_train_l2, y_train_l2)
 
         # Train L3 Model
         print("\n[3/3] Training L3 classifier...")
         X_train_l3 = self.vectorizer_l3.fit_transform(train_l3['description_clean'])
-        y_train_l3 = train_l3['Επίπεδο Κατηγοριοποίησης L.3'].notna()
+        y_train_l3 = train_l3['Επίπεδο Κατηγοριοποίησης L.3']  # FIX: Use actual L3 labels, not boolean
         self.model_l3 = MultinomialNB(alpha=self.alpha_l3)
         self.model_l3.fit(X_train_l3, y_train_l3)
 
@@ -285,7 +290,7 @@ class HierachicalTaxonomyClassifier:
 
             # Get the best L2 prediction
             l2_pred_idx = np.argmax(l2_filtered_probs)
-            l2_pred = l2_filtered_probs[l2_pred_idx]
+            l2_pred = l2_filtered_classes[l2_pred_idx]  # FIX: Use class name, not probability
             l2_conf = l2_filtered_probs[l2_pred_idx]
 
         # =========== PREDICT L3 (filtered by L2) ===========
@@ -327,9 +332,9 @@ class HierachicalTaxonomyClassifier:
             l3_filtered_probs = np.array(l3_filtered_probs)
             l3_filtered_probs = l3_filtered_probs / l3_filtered_probs.sum()
 
-            # Get the best L2 prediction
+            # Get the best L3 prediction
             l3_pred_idx = np.argmax(l3_filtered_probs)
-            l3_pred = l3_filtered_probs[l3_pred_idx]
+            l3_pred = l3_filtered_classes[l3_pred_idx]  # FIX: Use class name, not probability
             l3_conf = l3_filtered_probs[l3_pred_idx]
 
         # =========== CALCULATE COMBINED CONFIDENCE ===========
@@ -367,11 +372,8 @@ class HierachicalTaxonomyClassifier:
         # ============== Evaluate L1 ==============
         print("\n[1/3] Evaluating L1 classifier...")
         X_test_l1 = self.vectorizer_l1.transform(test_l1['description_clean'])
-        y_test_l1 = test_l1['Επίπεδο Κατηγοριοποίησης L.1'].notna()
+        y_test_l1 = test_l1['Επίπεδο Κατηγοριοποίησης L.1']  # FIX: Use actual labels
         y_pred_l1 = self.model_l1.predict(X_test_l1)
-
-        y_test_l1 = y_test_l1.astype(str)
-        y_pred_l1 = y_pred_l1.astype(str)
 
         print("\nClassification Report")
         print(classification_report(y_test_l1, y_pred_l1, zero_division=0))
@@ -381,7 +383,7 @@ class HierachicalTaxonomyClassifier:
         l1_f1_weighted = f1_score(y_test_l1, y_pred_l1, average='weighted', zero_division=0)
 
         results['l1'] = {
-            'accuracy': l1_accuracy, 
+            'accuracy': l1_accuracy,
             'f1_macro': l1_f1_macro,
             'f1_weighted': l1_f1_weighted
         }
@@ -389,7 +391,7 @@ class HierachicalTaxonomyClassifier:
         # ============== Evaluate L2 ==============
         print("\n[2/3] Evaluating L2 classifier...")
         X_test_l2 = self.vectorizer_l2.transform(test_l2['description_clean'])
-        y_test_l2 = test_l2['Επίπεδο Κατηγοριοποίησης L.2'].notna()
+        y_test_l2 = test_l2['Επίπεδο Κατηγοριοποίησης L.2']  # FIX: Use actual labels
         y_pred_l2 = self.model_l2.predict(X_test_l2)
 
         print("\nClassification Report")
@@ -400,7 +402,7 @@ class HierachicalTaxonomyClassifier:
         l2_f1_weighted = f1_score(y_test_l2, y_pred_l2, average='weighted', zero_division=0)
 
         results['l2'] = {
-            'accuracy': l2_accuracy, 
+            'accuracy': l2_accuracy,
             'f1_macro': l2_f1_macro,
             'f1_weighted': l2_f1_weighted
         }
@@ -408,7 +410,7 @@ class HierachicalTaxonomyClassifier:
         # ============== Evaluate L3 ==============
         print("\n[3/3] Evaluating L3 classifier...")
         X_test_l3 = self.vectorizer_l3.transform(test_l3['description_clean'])
-        y_test_l3 = test_l3['Επίπεδο Κατηγοριοποίησης L.3'].notna()
+        y_test_l3 = test_l3['Επίπεδο Κατηγοριοποίησης L.3']  # FIX: Use actual labels
         y_pred_l3 = self.model_l3.predict(X_test_l3)
 
         print("\nClassification Report")
@@ -419,7 +421,7 @@ class HierachicalTaxonomyClassifier:
         l3_f1_weighted = f1_score(y_test_l3, y_pred_l3, average='weighted', zero_division=0)
 
         results['l3'] = {
-            'accuracy': l3_accuracy, 
+            'accuracy': l3_accuracy,
             'f1_macro': l3_f1_macro,
             'f1_weighted': l3_f1_weighted
         }

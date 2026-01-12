@@ -205,3 +205,15 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Project-specific files
+# Excel files (data and results)
+*.xlsx
+*.xls
+
+# Trained models
+*.joblib
+
+# Temporary files
+temp_*.xlsx
+temp_*.joblib
