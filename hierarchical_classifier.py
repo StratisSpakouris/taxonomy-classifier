@@ -509,6 +509,14 @@ class HierachicalTaxonomyClassifier:
             'hierarchy_l2_to_l3': dict(self.hierarchy_l2_to_l3),
             'training_stats': self.training_stats,
             'text_preprocessor': self.text_preprocessor,
+            'params': {
+                'alpha_l1': self.alpha_l1,
+                'alpha_l1': self.alpha_l1,
+                'alpha_l1': self.alpha_l1,
+                'max_features': self.max_features,
+                'ngram_range': self.ngram_range,
+                'min_df': self.min_df
+            },
             'version': '2.0'
         }
         joblib.dump(model_data, filepath)
@@ -543,3 +551,4 @@ class HierachicalTaxonomyClassifier:
         version = model_data.get('version', '1.0')
 
         return obj
+
