@@ -15,6 +15,7 @@ python main_ensemble.py --input data.xlsx --mode train --use-ensemble
 python main_ensemble.py --input data.xlsx --mode predict --model model.joblib
 """
 
+import joblib
 import pandas as pd
 import numpy as np
 import argparse
