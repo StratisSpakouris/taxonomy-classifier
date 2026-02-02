@@ -20,8 +20,9 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.naive_bayes import MultinomialNB, ComplementNB
 from sklearn.linear_model import LogisticRegression
-from sklearn.svm import LinearSVC
+from sklearn.svm import SVC, LinearSVC
 from sklearn.ensemble import VotingClassifier, StackingClassifier
+from sklearn.calibration import CalibratedClassifierCV 
 from sklearn.model_selection import GridSearchCV, StratifiedKFold
 from sklearn.metrics import classification_report, f1_score
 from preprocessing import TextPreprocessor, DataPreprocessor, normalize_category_name
@@ -30,6 +31,7 @@ import xgboost as xgb
 from collections import defaultdict
 import warnings
 import gc
+import time
 warnings.filterwarnings('ignore')
 
 
@@ -52,7 +54,8 @@ class EnsembleConfig:
         # L2 parameters (Stacking Ensemble)
         self.l2_alpha_nb = 0.1
         self.l2_alpha_cnb = 0.1
-        self.l2_cv_folds = 5  # For stacking meta-learner
+        self.l2_cv_folds = 3  # For stacking meta-
+        self.l2_use_calibrated_svc = True
         
         # L3 parameters (XGBoost)
         self.l3_n_estimators = 100
@@ -63,12 +66,35 @@ class EnsembleConfig:
         
         # GridSearch parameters
         self.use_gridsearch = True
-        self.gridsearch_cv = 5
+        self.use_gridsearch_l1 = True
+        self.use_gridsearch_l2 = False 
+        self.use_gridsearch_l3 = True
+        self.gridsearch_cv = 3
         self.gridsearch_n_jobs = -1  # Use all CPU cores
         
     def to_dict(self):
         """Export configuration as dictionary for saving."""
         return {k: v for k, v in self.__dict__.items() if not k.startswith('_')}
+    
+    def get_performance_estimate(self):
+        """Estimate training time based on settings."""
+        estimates = []
+        if self.use_gridsearch and self.use_gridsearch_l1:
+            estimates.append("L1: ~1-2 minutes")
+        else:
+            estimates.append("L1: ~30 seconds")
+
+        if self.use_gridsearch and self.use_gridsearch_l2:
+            estimates.append("L2: ~1-3 HOURS (nested CV)")
+        else:
+            estimates.append("L2: ~3-5 minutes")
+
+        if self.use_gridsearch and self.use_gridsearch_l3:
+            estimates.append("L3: ~3-10 minutes")
+        else:
+            estimates.append("L3: ~3-5 minutes")
+
+        return estimates
 
 
 class L1VotingEnsemble:
@@ -101,20 +127,24 @@ class L1VotingEnsemble:
             voting='soft',  # Use probability scores
             n_jobs=-1  # Use all CPU cores
         )
+            
+    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.1'):
+        """Train the L1 ensemble."""
+        print("\n[1/3] Training L1 Voting Ensemble (3 models)...")
+        start_time = time.time()
         
-    def train_with_gridsearch(self, X, y):
-        """
-        Train with hyperparameter tuning using GridSearchCV.
-        
-        Note: GridSearchCV with VotingClassifier needs special syntax.
-        We tune the alpha parameters of the NB models.
-        """
-        print("  [L1] Tuning hyperparameters with GridSearchCV...")
-        
+        # Vectorize
+        X_train = self.vectorizer.fit_transform(train_df[description_col])
+        y_train = train_df[label_col]
+
         # Build base ensemble
         self.build_ensemble()
-        
-        if self.config.use_gridsearch:
+
+        # Check if GridSearch is enabled for L1
+        use_gs = self.config.use_gridsearch and self.config.use_gridsearch_l1
+
+        if use_gs:
+            print("  [L1] Tuning hyperparameters with GridSearchCV...")
             # Parameter grid for VotingClassifier
             # Format: 'estimator_name__parameter_name'
             param_grid = {
@@ -137,28 +167,18 @@ class L1VotingEnsemble:
                 verbose=0
             )
             
-            grid_search.fit(X, y)
-            
+            grid_search.fit(X_train, y_train)
             self.ensemble = grid_search.best_estimator_
             
             print(f"  [L1] Best params: {grid_search.best_params_}")
             print(f"  [L1] Best CV score: {grid_search.best_score_:.3f}")
         else:
-            # Train without grid search
-            self.ensemble.fit(X, y)
-            
-    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.1'):
-        """Train the L1 ensemble."""
-        print("\n[1/3] Training L1 Voting Ensemble (3 models)...")
-        
-        # Vectorize
-        X_train = self.vectorizer.fit_transform(train_df[description_col])
-        y_train = train_df[label_col]
-        
-        # Train with optional grid search
-        self.train_with_gridsearch(X_train, y_train)
-        
-        print(f"  [L1] Training complete. Classes: {len(self.ensemble.classes_)}")
+            print("  [L1] Training without GridSearch (faster)...")
+            self.ensemble.fit(X_train, y_train)
+
+
+        elapsed = time.time() - start_time
+        print(f"  [L1] Training complete {elapsed:.1f}. Classes: {len(self.ensemble.classes_)}")
         
     def predict(self, text):
         """Predict L1 category and confidence."""
@@ -196,17 +216,36 @@ class L2StackingEnsemble:
     def build_ensemble(self):
         """Build the stacking ensemble."""
         # Base models
+        # We use CalibratedClassifierCV to add probability support
+        if self.config.l2_use_calibrated_svc:
+            svc = CalibratedClassifierCV(
+                LinearSVC(class_weight='balanced', max_iter=2000, random_state=42),
+                cv='prefit' #2, Minimal CV for calibration to save time
+            )
+        else:
+            # Fallback: use LogisticRegression instead of SVC
+            svc = LogisticRegression(
+                max_iter=1000,
+                class_weight='balanced',
+                solver='saga',
+                random_state=42
+            )
+
         base_estimators = [
             ('nb', MultinomialNB(alpha=self.config.l2_alpha_nb)),
             ('cnb', ComplementNB(alpha=self.config.l2_alpha_cnb)),
-            ('lr', LogisticRegression(
+            ('lr_lbfgs', LogisticRegression(
                 max_iter=1000,
                 class_weight='balanced',
+                solver='lbfgs',
+                penalty='l2',
                 random_state=42
             )),
-            ('svc', LinearSVC(
+            ('lr_saga', LogisticRegression(
+                max_iter=1000,
                 class_weight='balanced',
-                max_iter=2000,
+                solver='lbfgs',
+                penalty='l1',
                 random_state=42
             ))
         ]
@@ -222,16 +261,30 @@ class L2StackingEnsemble:
             stack_method='predict_proba',  # Use probabilities
             n_jobs=-1
         )
+            
+    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.2'):
+        """Train the L2 ensemble."""
+        print("\n[2/3] Training L2 Stacking Ensemble (4 base + 1 meta)...")
+        start_time = time.time()
+
+        # Vectorize
+        X_train = self.vectorizer.fit_transform(train_df[description_col])
+        y_train = train_df[label_col]
         
-    def train_with_gridsearch(self, X, y):
-        """Train with hyperparameter tuning."""
-        print("  [L2] Tuning hyperparameters with GridSearchCV...")
+        # Validate data
+        if y_train.isna().any():
+            raise ValueError(f"L2 training data contains {y_train.isna().sum()} NaN values!")
         
         # Build base ensemble
         self.build_ensemble()
-        
-        if self.config.use_gridsearch:
-            # Parameter grid for StackingClassifier
+
+        # Check if GridSearch is enabled for L2
+        use_gs = self.config.use_gridsearch and self.config.use_gridsearch_l2
+
+        if use_gs:
+            print("     [L2]: GridSearch enabled - this will take ~1-3 HOURS!")
+            print("     [L2]: Set config.use_gridsearch_l2 = False for faster training")
+
             param_grid = {
                 'nb__alpha': [0.05, 0.1, 0.15],
                 'cnb__alpha': [0.05, 0.1, 0.15]
@@ -252,31 +305,18 @@ class L2StackingEnsemble:
                 verbose=0
             )
             
-            grid_search.fit(X, y)
-            
+            grid_search.fit(X_train, y_train) 
             self.ensemble = grid_search.best_estimator_
             
             print(f"  [L2] Best params: {grid_search.best_params_}")
             print(f"  [L2] Best CV score: {grid_search.best_score_:.3f}")
         else:
-            self.ensemble.fit(X, y)
-            
-    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.2'):
-        """Train the L2 ensemble."""
-        print("\n[2/3] Training L2 Stacking Ensemble (4 base + 1 meta)...")
+            print("  [L2] Training without GridSearch (recommended for speed)...")
+            print(f"  [L2] Using {self.config.l2_cv_folds}-fold CV for stacking...")
+            self.ensemble.fit(X_train, y_train)
         
-        # Vectorize
-        X_train = self.vectorizer.fit_transform(train_df[description_col])
-        y_train = train_df[label_col]
-        
-        # Validate data
-        if y_train.isna().any():
-            raise ValueError(f"L2 training data contains {y_train.isna().sum()} NaN values!")
-        
-        # Train with optional grid search
-        self.train_with_gridsearch(X_train, y_train)
-        
-        print(f"  [L2] Training complete. Classes: {len(self.ensemble.classes_)}")
+        elapsed = time.time() - start_time
+        print(f"  [L1] Training complete in {elapsed:.1f}. Classes: {len(self.ensemble.classes_)}")
         
     def predict(self, text):
         """Predict L2 category and confidence."""
@@ -328,16 +368,31 @@ class L3XGBoostClassifier:
             random_state=42,
             eval_metric='mlogloss'
         )
+            
+    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.3'):
+        """Train the L3 XGBoost model."""
+        print("\n[3/3] Training L3 XGBoost Classifier (100 trees)...")
+        start_time = time.time()
         
-    def train_with_gridsearch(self, X, y, num_classes):
-        """Train with hyperparameter tuning."""
-        print("  [L3] Tuning hyperparameters with GridSearchCV...")
+        # Vectorize
+        X_train = self.vectorizer.fit_transform(train_df[description_col])
+        y_train = train_df[label_col]
         
+        # Validate data
+        if y_train.isna().any():
+            raise ValueError(f"L3 training data contains {y_train.isna().sum()} NaN values!")
+        
+        # Get number of classes
+        num_classes = len(y_train.unique())
+
         # Build base model
         self.build_model(num_classes)
-        
-        if self.config.use_gridsearch:
-            # Parameter grid for XGBoost
+
+        # Check if GridSearch is enabled for L2
+        use_gs = self.config.use_gridsearch and self.config.use_gridsearch_l3
+
+        if use_gs:
+            print("  [L3] Tuning hyperparameters with GridSearchCV...")
             param_grid = {
                 'learning_rate': [0.05, 0.1, 0.2],
                 'max_depth': [3, 4, 5]
@@ -358,34 +413,18 @@ class L3XGBoostClassifier:
                 verbose=0
             )
             
-            grid_search.fit(X, y)
+            grid_search.fit(X_train, y_train)
             
             self.model = grid_search.best_estimator_
             
             print(f"  [L3] Best params: {grid_search.best_params_}")
             print(f"  [L3] Best CV score: {grid_search.best_score_:.3f}")
         else:
-            self.model.fit(X, y)
-            
-    def train(self, train_df, description_col='description_clean', label_col='Επίπεδο Κατηγοριοποίησης L.3'):
-        """Train the L3 XGBoost model."""
-        print("\n[3/3] Training L3 XGBoost Classifier (100 trees)...")
+            print("  [L3] Training without GridSearch (faster)...")
+            self.model.fit(X_train, y_train)
         
-        # Vectorize
-        X_train = self.vectorizer.fit_transform(train_df[description_col])
-        y_train = train_df[label_col]
-        
-        # Validate data
-        if y_train.isna().any():
-            raise ValueError(f"L3 training data contains {y_train.isna().sum()} NaN values!")
-        
-        # Get number of classes
-        num_classes = len(y_train.unique())
-        
-        # Train with optional grid search
-        self.train_with_gridsearch(X_train, y_train, num_classes)
-        
-        print(f"  [L3] Training complete. Classes: {num_classes}")
+        elapsed = time.time() - start_time
+        print(f"  [L1] Training complete {elapsed:.1f}. Classes: {num_classes}")
         
     def predict(self, text):
         """Predict L3 category and confidence."""
@@ -446,6 +485,11 @@ class HierarchicalEnsembleClassifier:
         
         # Training stats
         self.training_stats = {}
+
+        # Print performance estimate
+        print("\nTraining time estimates:")
+        for est in self.config.get_performance_estimate():
+            print(f"    {est}")
         
     def load_official_taxonomy(self, excel_path, sheet_name='L1-L2-L3'):
         """
@@ -541,6 +585,8 @@ class HierarchicalEnsembleClassifier:
         print("=" * 70)
         print("TRAINING HIERARCHICAL ENSEMBLE CLASSIFIER")
         print("=" * 70)
+
+        total_start = time.time()
         
         # Train L1
         self.l1_ensemble.train(train_l1)
@@ -555,7 +601,7 @@ class HierarchicalEnsembleClassifier:
         gc.collect()  # Free memory
         
         print("\n" + "=" * 70)
-        print("ALL MODELS TRAINED SUCCESSFULLY")
+        print(f"ALL MODELS TRAINED in {time.time() - total_start:.1f}s")
         print("=" * 70)
         
     def predict(self, description, confidence_threshold=0.5):
