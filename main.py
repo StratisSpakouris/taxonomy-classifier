@@ -368,7 +368,7 @@ class ProcurementTaxonomyPipeline:
 
         return result_df
 
-    def save_results_to_excel(self, df, output_path, highlight_low_confidence=True):
+    def save_results_to_excel(self, df, output_path, evaluation_results=None, highlight_low_confidence=True):
         """
         Save results to Excel with conditional formatting.
 
@@ -376,7 +376,7 @@ class ProcurementTaxonomyPipeline:
         ---------
         1. Save all data to Excel
         2. Highlight rows with low confidence in yellow
-        3. Add a summary sheet with statistics
+        3. Add evaluation metrics sheet with business explanations
 
         """
 
@@ -390,22 +390,206 @@ class ProcurementTaxonomyPipeline:
             # Main data sheet
             df.to_excel(writer, sheet_name='Predictions', index=False)
 
-            # Summary sheet
-            #summary_data = self._create_summary(df)
-            #summary_df = pd.DataFrame(summary_data)
-            #summary_df.to_excel(writer, sheet_name='Summary', index=False)
+            # Evaluation metrics sheet (if available)
+            if evaluation_results is not None:
+                metrics_df = self._create_evaluation_metrics_sheet(df, evaluation_results)
+                metrics_df.to_excel(writer, sheet_name='Evaluation Metrics', index=False)
 
         if highlight_low_confidence:
             self._apply_highlighting(output_path, 'Predictions', self.confidence_threshold)
 
+        sheets_list = ['Predictions']
+        if evaluation_results is not None:
+            sheets_list.append('Evaluation Metrics')
+
         print(f"\nResults saved successfully!")
         print(f"    File: {output_path}")
-        print(f"    Sheets: 'Predictions', 'Summary'")
+        print(f"    Sheets: {', '.join(sheets_list)}")
 
-    def _create_summary(self, df):
+    def _create_evaluation_metrics_sheet(self, df, evaluation_results):
         """
-        Create summary statistics.
+        Create evaluation metrics sheet with business explanations.
+
+        Parameters:
+        -----------
+        df : pd.DataFrame
+            Predictions dataframe
+        evaluation_results : dict
+            Model evaluation results from training
+
+        Returns:
+        --------
+        pd.DataFrame : Formatted metrics data
         """
+
+        # Calculate prediction statistics
+        has_predictions = df['L1_Prediction'].notna()
+        total_predictions = has_predictions.sum()
+
+        if total_predictions > 0:
+            auto_accept_count = df.loc[has_predictions, 'Auto_Accept'].sum()
+            auto_accept_pct = (auto_accept_count / total_predictions) * 100
+            manual_review_count = total_predictions - auto_accept_count
+            manual_review_pct = (manual_review_count / total_predictions) * 100
+            avg_confidence = df.loc[has_predictions, 'Combined_Confidence'].mean()
+            min_confidence = df.loc[has_predictions, 'Combined_Confidence'].min()
+            max_confidence = df.loc[has_predictions, 'Combined_Confidence'].max()
+        else:
+            auto_accept_count = 0
+            auto_accept_pct = 0
+            manual_review_count = 0
+            manual_review_pct = 0
+            avg_confidence = 0
+            min_confidence = 0
+            max_confidence = 0
+
+        # Build metrics data
+        rows = []
+
+        # Section 1: Prediction Summary
+        rows.append({'Metric': '=== PREDICTION SUMMARY ===', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({
+            'Metric': 'Total Predictions',
+            'Value': int(total_predictions),
+            'Explanation': 'Number of rows classified by the model'
+        })
+        rows.append({
+            'Metric': 'Auto-Accept Count',
+            'Value': int(auto_accept_count),
+            'Explanation': f'Predictions with confidence >= {self.confidence_threshold:.2f} (ready to use)'
+        })
+        rows.append({
+            'Metric': 'Auto-Accept Percentage',
+            'Value': f'{auto_accept_pct:.1f}%',
+            'Explanation': 'Proportion of predictions that meet confidence threshold'
+        })
+        rows.append({
+            'Metric': 'Manual Review Count',
+            'Value': int(manual_review_count),
+            'Explanation': f'Predictions with confidence < {self.confidence_threshold:.2f} (need human review)'
+        })
+        rows.append({
+            'Metric': 'Manual Review Percentage',
+            'Value': f'{manual_review_pct:.1f}%',
+            'Explanation': 'Proportion of predictions flagged for manual verification'
+        })
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({
+            'Metric': 'Average Confidence',
+            'Value': f'{avg_confidence:.3f}',
+            'Explanation': 'Mean confidence across all predictions (higher is better)'
+        })
+        rows.append({
+            'Metric': 'Min Confidence',
+            'Value': f'{min_confidence:.3f}',
+            'Explanation': 'Lowest confidence score (identifies most uncertain predictions)'
+        })
+        rows.append({
+            'Metric': 'Max Confidence',
+            'Value': f'{max_confidence:.3f}',
+            'Explanation': 'Highest confidence score (best model certainty)'
+        })
+
+        # Section 2: Model Performance
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '=== MODEL PERFORMANCE (Test Set) ===', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+
+        # L1 metrics
+        rows.append({
+            'Metric': 'L1 Accuracy',
+            'Value': f"{evaluation_results['l1']['accuracy']:.1%}",
+            'Explanation': 'Top-level category classification accuracy (how often L1 predictions are correct)'
+        })
+        rows.append({
+            'Metric': 'L1 F1-Score (Weighted)',
+            'Value': f"{evaluation_results['l1']['f1_weighted']:.3f}",
+            'Explanation': 'L1 quality score balancing precision and recall across all categories (0-1, higher is better)'
+        })
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+
+        # L2 metrics
+        rows.append({
+            'Metric': 'L2 Accuracy',
+            'Value': f"{evaluation_results['l2']['accuracy']:.1%}",
+            'Explanation': 'Mid-level category classification accuracy (L2 is harder than L1 due to more classes)'
+        })
+        rows.append({
+            'Metric': 'L2 F1-Score (Weighted)',
+            'Value': f"{evaluation_results['l2']['f1_weighted']:.3f}",
+            'Explanation': 'L2 quality score balancing precision and recall (lower than L1 is expected)'
+        })
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+
+        # L3 metrics
+        rows.append({
+            'Metric': 'L3 Accuracy',
+            'Value': f"{evaluation_results['l3']['accuracy']:.1%}",
+            'Explanation': 'Fine-grained category classification accuracy (L3 is most challenging level)'
+        })
+        rows.append({
+            'Metric': 'L3 F1-Score (Weighted)',
+            'Value': f"{evaluation_results['l3']['f1_weighted']:.3f}",
+            'Explanation': 'L3 quality score balancing precision and recall (lowest scores are normal)'
+        })
+
+        # Section 3: Metric Definitions
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '=== METRIC DEFINITIONS ===', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({
+            'Metric': 'Confidence Score',
+            'Value': '0.0 - 1.0',
+            'Explanation': 'Model certainty in prediction. Combines L1, L2, L3 probabilities. Higher = more certain.'
+        })
+        rows.append({
+            'Metric': 'Accuracy',
+            'Value': '% correct',
+            'Explanation': 'Percentage of test predictions that exactly match true labels. Simple correctness metric.'
+        })
+        rows.append({
+            'Metric': 'F1-Score',
+            'Value': '0.0 - 1.0',
+            'Explanation': 'Harmonic mean of precision (% of predictions that are correct) and recall (% of true labels found). Better for imbalanced data.'
+        })
+        rows.append({
+            'Metric': 'Weighted F1',
+            'Value': 'avg by class',
+            'Explanation': 'F1-score averaged across all categories, weighted by number of samples in each category.'
+        })
+        rows.append({
+            'Metric': 'Highlighting',
+            'Value': 'Yellow cells',
+            'Explanation': f'Only taxonomy levels (L1/L2/L3) with confidence < {self.confidence_threshold:.2f} are highlighted. Allows granular review.'
+        })
+
+        # Section 4: Recommendations
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '=== RECOMMENDATIONS ===', 'Value': '', 'Explanation': ''})
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+
+        if auto_accept_pct >= 70:
+            recommendation = 'GOOD: High auto-accept rate indicates model is performing well. Most predictions can be used directly.'
+        elif auto_accept_pct >= 50:
+            recommendation = 'MODERATE: Acceptable performance but significant manual review needed. Consider lowering threshold or improving training data.'
+        else:
+            recommendation = 'LOW: High manual review rate suggests model uncertainty. Recommended actions: (1) Add more training data, (2) Lower confidence threshold, (3) Review data quality.'
+
+        rows.append({
+            'Metric': 'Overall Assessment',
+            'Value': f'{auto_accept_pct:.0f}% auto-accept',
+            'Explanation': recommendation
+        })
+
+        rows.append({'Metric': '', 'Value': '', 'Explanation': ''})
+        rows.append({
+            'Metric': 'Next Steps',
+            'Value': 'Review highlighted',
+            'Explanation': 'Focus on yellow-highlighted cells in Predictions sheet. These need human verification before use.'
+        })
+
+        return pd.DataFrame(rows)
 
     def _apply_highlighting(self, excel_path, sheet_name, threshold):
         """
@@ -553,7 +737,7 @@ class ProcurementTaxonomyPipeline:
         result_df = self.merge_results(df, labeled_df, predicted_df)
 
         # Save results
-        self.save_results_to_excel(result_df, output_path)
+        self.save_results_to_excel(result_df, output_path, evaluation_results)
 
         print("\n" + "="*70)
         print("PIPELINE COMPLETE")

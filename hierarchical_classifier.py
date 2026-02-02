@@ -36,10 +36,15 @@ class HierachicalTaxonomyClassifier:
                  text_preprocessor=None):
         
         self.text_preprocessor = text_preprocessor or TextPreprocessor()
-        
+
         self.alpha_l1 = alpha_l1
         self.alpha_l2 = alpha_l2
         self.alpha_l3 = alpha_l3
+
+        # Store hyperparameters for saving/loading
+        self.max_features = max_features
+        self.ngram_range = ngram_range
+        self.min_df = min_df
 
         # TD-IDF Vectorizers for each level
         self.vectorizer_l1 = TfidfVectorizer(

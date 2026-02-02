@@ -178,7 +178,7 @@ class L1VotingEnsemble:
 
 
         elapsed = time.time() - start_time
-        print(f"  [L1] Training complete {elapsed:.1f}. Classes: {len(self.ensemble.classes_)}")
+        print(f"  [L1] Training complete in {elapsed:.1f}s. Classes: {len(self.ensemble.classes_)}")
         
     def predict(self, text):
         """Predict L1 category and confidence."""
@@ -220,7 +220,7 @@ class L2StackingEnsemble:
         if self.config.l2_use_calibrated_svc:
             svc = CalibratedClassifierCV(
                 LinearSVC(class_weight='balanced', max_iter=2000, random_state=42),
-                cv='prefit' #2, Minimal CV for calibration to save time
+                cv=2  # Minimal CV for calibration to save time
             )
         else:
             # Fallback: use LogisticRegression instead of SVC
@@ -244,7 +244,7 @@ class L2StackingEnsemble:
             ('lr_saga', LogisticRegression(
                 max_iter=1000,
                 class_weight='balanced',
-                solver='lbfgs',
+                solver='saga',
                 penalty='l1',
                 random_state=42
             ))
@@ -316,7 +316,7 @@ class L2StackingEnsemble:
             self.ensemble.fit(X_train, y_train)
         
         elapsed = time.time() - start_time
-        print(f"  [L1] Training complete in {elapsed:.1f}. Classes: {len(self.ensemble.classes_)}")
+        print(f"  [L2] Training complete in {elapsed:.1f}s. Classes: {len(self.ensemble.classes_)}")
         
     def predict(self, text):
         """Predict L2 category and confidence."""
@@ -424,7 +424,7 @@ class L3XGBoostClassifier:
             self.model.fit(X_train, y_train)
         
         elapsed = time.time() - start_time
-        print(f"  [L1] Training complete {elapsed:.1f}. Classes: {num_classes}")
+        print(f"  [L3] Training complete in {elapsed:.1f}s. Classes: {num_classes}")
         
     def predict(self, text):
         """Predict L3 category and confidence."""

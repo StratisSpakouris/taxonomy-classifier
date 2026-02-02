@@ -19,6 +19,8 @@ if 'trained_model' not in st.session_state:
     st.session_state.trained_model = None
 if 'model_path' not in st.session_state:
     st.session_state.model_path = None
+if 'evaluation_results' not in st.session_state:
+    st.session_state.evaluation_results = None
 
 # Title
 st.title("🏷️ Procurement Taxonomy Classifier")
@@ -134,6 +136,7 @@ with tab1:
                 # Store in session state
                 st.session_state.trained_model = pipeline.classifier
                 st.session_state.model_path = model_save_path
+                st.session_state.evaluation_results = evaluation_results
 
                 progress_bar.progress(100)
                 status_text.text("Training complete!")
@@ -261,13 +264,15 @@ with tab2:
         with open(temp_input_path, 'wb') as f:
             f.write(prediction_file.read())
 
-        # Handle model
+        # Handle model and evaluation results
         if use_session_model:
             classifier = st.session_state.trained_model
+            eval_results = st.session_state.evaluation_results
         else:
             with open(temp_model_path, 'wb') as f:
                 f.write(model_file.read())
             classifier = HierachicalTaxonomyClassifier.load(temp_model_path)
+            eval_results = None  # No evaluation results when loading external model
 
         try:
             # Create progress indicators
@@ -309,7 +314,7 @@ with tab2:
                 else:
                     output_path = output_filename if output_filename.endswith('.xlsx') else f"{output_filename}.xlsx"
 
-                pipeline.save_results_to_excel(result_df, output_path, highlight_low_confidence=enable_highlighting)
+                pipeline.save_results_to_excel(result_df, output_path, evaluation_results=eval_results, highlight_low_confidence=enable_highlighting)
 
                 progress_bar.progress(100)
                 status_text.text("Predictions complete!")
