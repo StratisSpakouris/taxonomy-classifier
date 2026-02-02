@@ -122,14 +122,14 @@ with tab1:
 
                 evaluation_results = pipeline.train_model(labeled_df, test_size=test_size)
 
+                #gc.collect()
+
                 # Save model
                 status_text.text("Saving model...")
                 progress_bar.progress(90)
 
                 model_save_path = f"taxonomy_classifier_{datetime.now().strftime('%Y%m%d_%H%M%S')}.joblib"
                 pipeline.classifier.save(model_save_path)
-
-                gc.collect()
 
                 # Store in session state
                 st.session_state.trained_model = pipeline.classifier
@@ -434,4 +434,3 @@ with st.sidebar:
 
     st.markdown("---")
     st.caption("Built with Streamlit")
-
